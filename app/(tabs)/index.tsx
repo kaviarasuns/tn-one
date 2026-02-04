@@ -7,6 +7,8 @@ import {
   Bus,
   SAMPLE_BUSES,
   SAMPLE_ROUTES,
+  SAMPLE_SCHEDULE,
+  ScheduleEntry,
   TIRUPPUR_REGION
 } from '@/constants/bus-data';
 import * as Location from 'expo-location';
@@ -20,6 +22,13 @@ type RoutePath = {
   points: Coordinate[];
   segmentLengths: number[];
   totalLength: number;
+};
+
+type TripWindow = {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  direction: 'forward' | 'reverse';
 };
 
 const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -56,6 +65,54 @@ const bearingDegrees = (a: Coordinate, b: Coordinate) => {
   return ((bearing * 180) / Math.PI + 360) % 360;
 };
 
+const buildPath = (points: Coordinate[]): RoutePath => {
+  const segmentLengths: number[] = [];
+  let totalLength = 0;
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const segmentLength = haversineDistance(points[i], points[i + 1]);
+    segmentLengths.push(segmentLength);
+    totalLength += segmentLength;
+  }
+
+  return { points, segmentLengths, totalLength };
+};
+
+const parseTimeToSeconds = (time: string) => {
+  const trimmed = time.trim();
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])$/);
+  if (!match) {
+    return null;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3].toUpperCase();
+
+  if (Number.isNaN(hour) || Number.isNaN(minute)) {
+    return null;
+  }
+
+  let normalizedHour = hour % 12;
+  if (period === 'PM') {
+    normalizedHour += 12;
+  }
+
+  return normalizedHour * 3600 + minute * 60;
+};
+
+const nowInSeconds = () => {
+  const now = new Date();
+  return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+};
+
+const resolveTripDirection = (entry: ScheduleEntry): TripWindow['direction'] => {
+  if (entry.startStopId === 's10') {
+    return 'reverse';
+  }
+  return 'forward';
+};
+
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapViewRef>(null);
@@ -63,7 +120,6 @@ export default function MapScreen() {
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
   const [buses, setBuses] = useState<Bus[]>(SAMPLE_BUSES);
   const [isTracking, setIsTracking] = useState(false);
-  const busProgressRef = useRef<Record<string, number>>({});
 
   const routePaths = useMemo(() => {
     const paths = new Map<string, RoutePath>();
@@ -78,19 +134,46 @@ export default function MapScreen() {
 
       if (points.length < 2) return;
 
-      const segmentLengths: number[] = [];
-      let totalLength = 0;
-
-      for (let i = 0; i < points.length - 1; i += 1) {
-        const segmentLength = haversineDistance(points[i], points[i + 1]);
-        segmentLengths.push(segmentLength);
-        totalLength += segmentLength;
-      }
-
-      paths.set(route.id, { points, segmentLengths, totalLength });
+      paths.set(route.id, buildPath(points));
     });
 
     return paths;
+  }, []);
+
+  const reverseRoutePaths = useMemo(() => {
+    const paths = new Map<string, RoutePath>();
+    routePaths.forEach((path, routeId) => {
+      const reversedPoints = [...path.points].reverse();
+      paths.set(routeId, buildPath(reversedPoints));
+    });
+    return paths;
+  }, [routePaths]);
+
+  const routeTripWindows = useMemo(() => {
+    const windows = new Map<string, TripWindow[]>();
+    SAMPLE_SCHEDULE.forEach((entry) => {
+      if (!entry.routeId) return;
+      const startSeconds = parseTimeToSeconds(entry.departureTime);
+      const endSeconds = parseTimeToSeconds(entry.arrivalTime);
+      if (startSeconds === null || endSeconds === null) return;
+      if (endSeconds <= startSeconds) return;
+
+      const direction = resolveTripDirection(entry);
+      const list = windows.get(entry.routeId) ?? [];
+      list.push({
+        id: entry.id,
+        startSeconds,
+        endSeconds,
+        direction,
+      });
+      windows.set(entry.routeId, list);
+    });
+
+    windows.forEach((list) =>
+      list.sort((a, b) => a.startSeconds - b.startSeconds)
+    );
+
+    return windows;
   }, []);
 
   useEffect(() => {
@@ -106,25 +189,52 @@ export default function MapScreen() {
     })();
   }, []);
 
-  // Simulate bus movement along the route path
+  // Simulate bus movement along the schedule windows
   useEffect(() => {
     const interval = setInterval(() => {
       setBuses((prevBuses) =>
         prevBuses.map((bus) => {
-          const path = routePaths.get(bus.routeId);
+          const trips = routeTripWindows.get(bus.routeId);
+          if (!trips || trips.length === 0) {
+            return bus;
+          }
+
+          const secondNow = nowInSeconds();
+          const activeTrip = trips.find(
+            (trip) => secondNow >= trip.startSeconds && secondNow <= trip.endSeconds
+          );
+
+          let trip = activeTrip;
+          if (!trip) {
+            const lastTrip = [...trips].reverse().find((t) => secondNow > t.endSeconds);
+            const nextTrip = trips.find((t) => secondNow < t.startSeconds);
+
+            trip = lastTrip ?? nextTrip ?? trips[0];
+          }
+
+          const path =
+            trip.direction === 'reverse'
+              ? reverseRoutePaths.get(bus.routeId)
+              : routePaths.get(bus.routeId);
+
           if (!path || path.totalLength === 0) {
             return bus;
           }
 
-          const previousProgress = busProgressRef.current[bus.id] ?? 0;
-          const adjustedSpeed = Math.max(12, bus.speed + (Math.random() - 0.5) * 4);
-          const distanceTraveled = (adjustedSpeed * 1000 * 2) / 3600;
-          const nextProgress =
-            (previousProgress + distanceTraveled) % path.totalLength;
+          let progress = 0;
+          const isActive = Boolean(activeTrip);
+          if (activeTrip) {
+            const duration = activeTrip.endSeconds - activeTrip.startSeconds;
+            progress =
+              duration > 0 ? (secondNow - activeTrip.startSeconds) / duration : 0;
+          } else if (secondNow < trip.startSeconds) {
+            progress = 0;
+          } else {
+            progress = 1;
+          }
 
-          busProgressRef.current[bus.id] = nextProgress;
-
-          let remaining = nextProgress;
+          const distanceAlong = path.totalLength * Math.min(1, Math.max(0, progress));
+          let remaining = distanceAlong;
           let segmentIndex = 0;
 
           while (
@@ -140,20 +250,25 @@ export default function MapScreen() {
           const segmentLength = path.segmentLengths[segmentIndex] || 1;
           const t = Math.min(1, Math.max(0, remaining / segmentLength));
           const position = interpolate(start, end, t);
+          const durationMinutes = (trip.endSeconds - trip.startSeconds) / 60 || 1;
+          const averageSpeedKmh =
+            (path.totalLength / 1000) / (durationMinutes / 60);
 
           return {
             ...bus,
             currentLatitude: position.latitude,
             currentLongitude: position.longitude,
             heading: bearingDegrees(start, end),
-            speed: adjustedSpeed,
+            speed: isActive && Number.isFinite(averageSpeedKmh)
+              ? Math.max(5, averageSpeedKmh)
+              : 0,
           };
         })
       );
-    }, 2000);
+    }, 5000);
 
     return () => clearInterval(interval);
-  }, [routePaths]);
+  }, [routePaths, reverseRoutePaths, routeTripWindows]);
 
   const handleToggleRoute = (routeId: string) => {
     setSelectedRoutes((prev) =>
