@@ -1,50 +1,73 @@
-# Welcome to your Expo app 👋
+# TN One
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A cross-platform bus tracking app prototype for Tamil Nadu, built with Expo and React Native. It shows a live map with simulated bus positions, routes drawn along real roads, and a searchable timetable.
 
-## Get started
+## What it does
 
-1. Install dependencies
+TN One shows town-bus routes on a map (sample data currently covers Tiruppur: New Bus Stand ↔ Palladam Bus Stand). It animates buses along their routes according to the trip schedule and lets riders browse timetables. Bus positions are **simulated on the device** from schedule data; the app is not connected to a real-time feed yet.
 
-   ```bash
-   npm install
-   ```
+## Key features
 
-2. Start the app
+- **Live Map tab:**
+  - Google Maps on Android (via `react-native-maps`) showing route polylines, stop markers and bus markers.
+  - **Road-following route lines:** stop coordinates are snapped to real roads with the public OSRM routing API, falling back to straight lines if the request fails.
+  - **Schedule-driven bus simulation:** each bus's position is interpolated along its route based on the current time and its trip windows, in both directions.
+  - Route filter chips, a bus info card (next stop, ETA, speed, occupancy) and a "locate me" button that uses device location (`expo-location`, with permission prompts).
+- **Timetable tab** with search by route number or name, All / Upcoming / Delayed tabs and schedule cards showing on-time, delayed or cancelled status.
+- **Settings tab** with preference toggles (notifications, live tracking, theme, sound). <!-- TODO: toggles are local UI state only and are not persisted -->
+- File-based navigation with Expo Router (bottom tabs), haptic tab feedback, light and dark color schemes.
+- **Web fallback:** a stub map component is used on web, where `react-native-maps` isn't supported.
 
-   ```bash
-   npx expo start
-   ```
+## Tech stack
 
-In the output, you'll find options to open the app in a
+| Layer | Tech |
+| --- | --- |
+| Framework | Expo SDK 54, React Native 0.81 (New Architecture), React 19, TypeScript |
+| Navigation | Expo Router (typed routes), React Navigation bottom tabs |
+| Maps & location | `react-native-maps` (Google Maps provider on Android), `expo-location`, OSRM routing API |
+| Animation | `react-native-reanimated` |
+| Builds | EAS Build (development / preview / production profiles) |
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+## Project structure
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```
+app/
+  (tabs)/            # index (Live Map), timetable, settings, explore
+  _layout.tsx
+components/
+  bus/               # bus marker, bus info card, route filter, schedule card
+  map/               # native map view, web fallback, OSRM directions polyline
+constants/
+  bus-data.ts        # sample routes, stops, buses and schedule (Tiruppur)
+  theme.ts
+hooks/               # color scheme / theme hooks
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Getting started
 
-## Learn more
+**Prerequisites:** Node.js 20+ and pnpm. For native builds you also need Android Studio and/or Xcode, or a device with a development build.
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+pnpm install
+pnpm start          # Expo dev server
+pnpm android        # build & run on Android (expo run:android)
+pnpm ios            # build & run on iOS (expo run:ios)
+pnpm web            # run in the browser (map is a fallback stub)
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+**Google Maps API key (Android):** the native map needs a Google Maps SDK for Android key, configured under `expo.android.config.googleMaps.apiKey` in `app.json`.
+<!-- TODO: move the key out of app.json into an env var (e.g. GOOGLE_MAPS_API_KEY read from app.config.ts) and restrict it in Google Cloud Console. -->
 
-## Join the community
+Builds with EAS:
 
-Join our community of developers creating universal apps.
+```bash
+eas build --profile development   # or preview / production
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Roadmap
+
+<!-- TODO: confirm the roadmap. Gaps visible in the code: real-time bus data source, persisted settings, iOS map provider config, an interactive web map, and the timetable "Set Alert / Favorites / History" actions (currently UI only). -->
+
+## Author
+
+Built by [Kaviarasu S](https://github.com/kaviarasuns), Full Stack Developer.
